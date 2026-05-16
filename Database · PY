@@ -1,0 +1,265 @@
+"""
+database.py — Resume Matcher Pro
+SQLite storage: users (hashed passwords), analysis history, comparisons.
+
+Fix applied:
+  - connect() now uses timeout=30 so concurrent Streamlit reruns wait instead of crashing
+  - WAL (Write-Ahead Logging) mode enabled — allows multiple readers + one writer safely
+  - All connections use context managers (with conn:) so they auto-close even on error
+  - init_db() uses check_same_thread=False for Streamlit's multi-thread environment
+  - register_user catches both IntegrityError AND OperationalError (locked) gracefully
+"""
+
+import sqlite3
+import json
+import hashlib
+import os
+
+DB_PATH = "resume_matcher.db"
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  CONNECTION  — timeout=30 prevents "database is locked" crash
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_conn():
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=30,                  # wait up to 30s if DB is locked by another thread
+        check_same_thread=False,     # required for Streamlit's threading model
+    )
+    conn.row_factory = sqlite3.Row
+    # WAL mode: multiple readers + one writer can work simultaneously
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")   # 30 000 ms extra fallback
+    return conn
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  INIT  — create all tables on startup
+# ──────────────────────────────────────────────────────────────────────────────
+
+def init_db():
+    conn = get_conn()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                name     TEXT,
+                course   TEXT,
+                created  TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS analyses (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        INTEGER,
+                resume_name    TEXT,
+                job_title      TEXT,
+                score          REAL,
+                ngram_score    REAL,
+                tfidf_score    REAL,
+                ats_score      REAL,
+                matched_skills TEXT,
+                missing_skills TEXT,
+                dominant_cat   TEXT,
+                created        TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS comparisons (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id  INTEGER,
+                resume_a TEXT,
+                resume_b TEXT,
+                score_a  REAL,
+                score_b  REAL,
+                winner   TEXT,
+                created  TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  AUTH
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _hash(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+
+def register_user(username: str, password: str, name: str, course: str):
+    """
+    Returns (True, success_msg) or (False, error_msg).
+    Handles both duplicate-username and database-locked errors.
+    """
+    conn = None
+    try:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO users (username, password, name, course) VALUES (?, ?, ?, ?)",
+            (username.strip(), _hash(password), name.strip(), course.strip()),
+        )
+        conn.commit()
+        return True, "Account created successfully."
+
+    except sqlite3.IntegrityError:
+        # Username already exists
+        return False, "Username already exists. Please choose another."
+
+    except sqlite3.OperationalError as e:
+        # Catches "database is locked" and other operational errors
+        return False, "Database error: {}. Please try again.".format(str(e))
+
+    finally:
+        if conn:
+            conn.close()
+
+
+def login_user(username: str, password: str):
+    """Returns a sqlite3.Row for the user, or None if credentials are wrong."""
+    conn = None
+    try:
+        conn = get_conn()
+        row  = conn.execute(
+            "SELECT * FROM users WHERE username = ? AND password = ?",
+            (username.strip(), _hash(password)),
+        ).fetchone()
+        return row
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  ANALYSIS HISTORY
+# ──────────────────────────────────────────────────────────────────────────────
+
+def save_analysis(user_id: int, resume_name: str, job_title: str, result: dict):
+    conn = None
+    try:
+        conn = get_conn()
+        conn.execute(
+            """
+            INSERT INTO analyses
+                (user_id, resume_name, job_title, score, ngram_score,
+                 tfidf_score, ats_score, matched_skills, missing_skills, dominant_cat)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                resume_name,
+                str(job_title)[:80],
+                result.get("score",       0),
+                result.get("ngram_score", 0),
+                result.get("tfidf_score", 0),
+                result.get("ats_score",   0),
+                json.dumps(result.get("matched_list", [])[:20]),
+                json.dumps(result.get("missing_list", [])[:20]),
+                result.get("dominant_cat", ""),
+            ),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass   # non-fatal — history save failure should not crash the app
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_history(user_id: int) -> list:
+    conn = None
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT * FROM analyses WHERE user_id = ? ORDER BY created DESC LIMIT 50",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_stats(user_id: int) -> dict:
+    conn = None
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT score, created FROM analyses WHERE user_id = ? ORDER BY created",
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            return {"count": 0, "best": 0, "avg": 0, "trend": []}
+        scores = [r["score"] for r in rows]
+        return {
+            "count": len(scores),
+            "best":  max(scores),
+            "avg":   round(sum(scores) / len(scores), 1),
+            "trend": [(r["created"][:10], r["score"]) for r in rows],
+        }
+    except sqlite3.OperationalError:
+        return {"count": 0, "best": 0, "avg": 0, "trend": []}
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  COMPARISONS
+# ──────────────────────────────────────────────────────────────────────────────
+
+def save_comparison(user_id: int, name_a: str, name_b: str,
+                    score_a: float, score_b: float):
+    winner = name_a if score_a >= score_b else name_b
+    conn   = None
+    try:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO comparisons (user_id, resume_a, resume_b, score_a, score_b, winner) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, name_a, name_b, score_a, score_b, winner),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_comparisons(user_id: int) -> list:
+    conn = None
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT * FROM comparisons WHERE user_id = ? ORDER BY created DESC LIMIT 20",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  UTILITY  — delete the DB file to reset everything (dev use only)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def reset_db():
+    """Deletes and recreates the database. Useful during development."""
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+    init_db()
