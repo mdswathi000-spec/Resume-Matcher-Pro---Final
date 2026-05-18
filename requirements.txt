@@ -1,0 +1,8 @@
+streamlit
+scikit-learn
+pymupdf
+pandas
+plotly
+fpdf2
+openpyxl
+wordcloud
