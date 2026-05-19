@@ -65,22 +65,34 @@ st.set_page_config(
 # ── Hide ALL Streamlit default UI chrome ──────────────────────────────────────
 st.markdown("""
 <style>
-/* Top-right toolbar: Share, Star, Edit, GitHub icon, 3-dot menu */
-[data-testid="stToolbar"]          { display: none !important; visibility: hidden !important; }
-/* Bottom-right "Manage app" bar */
-[data-testid="stStatusWidget"]     { display: none !important; visibility: hidden !important; }
-/* Top coloured decoration bar */
-[data-testid="stDecoration"]       { display: none !important; }
-/* Hamburger main menu */
-#MainMenu                          { display: none !important; }
-/* "Made with Streamlit" footer */
-footer                             { display: none !important; }
-/* Full header bar */
-header[data-testid="stHeader"]     { display: none !important; background: none !important; }
-/* Remove extra top padding left by hidden header */
-.block-container                   { padding-top: 1.5rem !important; }
-/* Hide deploy button */
-.stDeployButton                    { display: none !important; }
+/* Top-right toolbar */
+[data-testid="stToolbar"]              { display: none !important; visibility: hidden !important; }
+/* Bottom-right Manage app bar — multiple selectors for all Streamlit versions */
+[data-testid="stStatusWidget"]         { display: none !important; visibility: hidden !important; }
+.stStatusWidget                        { display: none !important; visibility: hidden !important; }
+#stStatusWidget                        { display: none !important; visibility: hidden !important; }
+iframe[title="streamlit_analytics"]    { display: none !important; }
+/* The entire bottom bar container */
+.viewerBadge_container__r5tak         { display: none !important; }
+.viewerBadge_link__qRIco              { display: none !important; }
+/* Top decoration bar */
+[data-testid="stDecoration"]           { display: none !important; }
+/* Main menu */
+#MainMenu                              { display: none !important; }
+/* Footer */
+footer                                 { display: none !important; visibility: hidden !important; }
+/* Header */
+header[data-testid="stHeader"]         { display: none !important; }
+header                                 { display: none !important; }
+/* Extra bottom bar streamlit cloud adds */
+.css-164nlkn                           { display: none !important; }
+.css-z5fcl4                            { padding-bottom: 0 !important; }
+/* Remove padding from hidden header */
+.block-container                       { padding-top: 1.5rem !important; padding-bottom: 0 !important; }
+.stDeployButton                        { display: none !important; }
+/* Catch-all for any fixed bottom element */
+div[class*="StatusWidget"]             { display: none !important; }
+div[class*="manage"]                   { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
