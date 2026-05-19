@@ -62,6 +62,28 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Hide ALL Streamlit default UI chrome ──────────────────────────────────────
+st.markdown("""
+<style>
+/* Top-right toolbar: Share, Star, Edit, GitHub icon, 3-dot menu */
+[data-testid="stToolbar"]          { display: none !important; visibility: hidden !important; }
+/* Bottom-right "Manage app" bar */
+[data-testid="stStatusWidget"]     { display: none !important; visibility: hidden !important; }
+/* Top coloured decoration bar */
+[data-testid="stDecoration"]       { display: none !important; }
+/* Hamburger main menu */
+#MainMenu                          { display: none !important; }
+/* "Made with Streamlit" footer */
+footer                             { display: none !important; }
+/* Full header bar */
+header[data-testid="stHeader"]     { display: none !important; background: none !important; }
+/* Remove extra top padding left by hidden header */
+.block-container                   { padding-top: 1.5rem !important; }
+/* Hide deploy button */
+.stDeployButton                    { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SHOW DEPENDENCY ERROR BANNER IF NEEDED
 # ─────────────────────────────────────────────────────────────────────────────
